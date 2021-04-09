@@ -10,7 +10,7 @@ main(int argc, char *argv[])
   int pid;
   int first = 1;
   if (strcmp("-n", argv[1]) == 0 && strcmp("1", argv[2]) == 0) {
-      first = 3;
+    first = 3;
   }
 
   int start = 0;
@@ -20,7 +20,6 @@ main(int argc, char *argv[])
   
   char input[0x100];
   int n = read(0, input, 0x100);
-  input[n] = 0;
   int index = 0;
   for (int i = 0; i < n; i++) {
     if (input[i] == '\n') {
