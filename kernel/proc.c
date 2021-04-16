@@ -695,3 +695,15 @@ procdump(void)
     printf("\n");
   }
 }
+
+uint64 get_unuse_proc() {
+  struct proc *p;
+
+  uint64 res = 0;
+  for(p = proc; p < &proc[NPROC]; p++) {
+    if(p->state != UNUSED) {
+      res++;
+    }
+  }
+  return res;
+}
