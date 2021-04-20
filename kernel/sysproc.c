@@ -109,8 +109,7 @@ sys_trace(void)
   return 0;
 }
 
-uint64 get_free_mem(void);
-uint64 get_unuse_proc();
+
 uint64
 sys_sysinfo(void)
 {
