@@ -5,6 +5,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -47,12 +49,54 @@ kvminit()
   kvmmap(TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
 }
 
+/*
+ * create a direct-map page table for the kernel for every process.
+ */
+pagetable_t
+kvminitforprocess()
+{
+  pagetable_t kernel_table = (pagetable_t) kalloc();
+  memset(kernel_table, 0, PGSIZE);
+
+  // uart registers
+  kvmmapforprocess(kernel_table, UART0, UART0, PGSIZE, PTE_R | PTE_W);
+
+  // virtio mmio disk interface
+  kvmmapforprocess(kernel_table, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
+
+  // CLINT
+  kvmmapforprocess(kernel_table, CLINT, CLINT, 0x10000, PTE_R | PTE_W);
+
+  // PLIC
+  kvmmapforprocess(kernel_table, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
+
+  // map kernel text executable and read-only.
+  kvmmapforprocess(kernel_table, KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
+
+  // map kernel data and the physical RAM we'll make use of.
+  kvmmapforprocess(kernel_table, (uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
+
+  // map the trampoline for trap entry/exit to
+  // the highest virtual address in the kernel.
+  kvmmapforprocess(kernel_table, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
+  return kernel_table;
+}
+
 // Switch h/w page table register to the kernel's page table,
 // and enable paging.
 void
 kvminithart()
 {
   w_satp(MAKE_SATP(kernel_pagetable));
+  sfence_vma();
+}
+
+// Switch h/w page table register to the kernel's page table,
+// and enable paging, for the kernel page table of process
+void
+kvminithartforprocess(pagetable_t pagetable)
+{
+  w_satp(MAKE_SATP(pagetable));
   sfence_vma();
 }
 
@@ -121,6 +165,16 @@ kvmmap(uint64 va, uint64 pa, uint64 sz, int perm)
     panic("kvmmap");
 }
 
+// add a mapping to the kernel page table.
+// only used when booting.
+// does not flush TLB or enable paging, for the kernel page table of process
+void
+kvmmapforprocess(pagetable_t page_table, uint64 va, uint64 pa, uint64 sz, int perm)
+{
+  if(mappages(page_table, va, sz, pa, perm) != 0)
+    panic("kvmmapforprocess");
+}
+
 // translate a kernel virtual address to
 // a physical address. only needed for
 // addresses on the stack.
@@ -131,8 +185,8 @@ kvmpa(uint64 va)
   uint64 off = va % PGSIZE;
   pte_t *pte;
   uint64 pa;
-  
-  pte = walk(kernel_pagetable, va, 0);
+  struct proc* p = myproc();
+  pte = walk(p->kerneltable, va, 0);
   if(pte == 0)
     panic("kvmpa");
   if((*pte & PTE_V) == 0)
@@ -284,6 +338,23 @@ freewalk(pagetable_t pagetable)
       pagetable[i] = 0;
     } else if(pte & PTE_V){
       panic("freewalk: leaf");
+    }
+  }
+  kfree((void*)pagetable);
+}
+
+// freewalk for per process
+void
+freewalkforprocess(pagetable_t pagetable)
+{
+  // there are 2^9 = 512 PTEs in a page table.
+  for(int i = 0; i < 512; i++){
+    pte_t pte = pagetable[i];
+    if((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0){
+      // this PTE points to a lower-level page table.
+      uint64 child = PTE2PA(pte);
+      freewalkforprocess((pagetable_t)child);
+      pagetable[i] = 0;
     }
   }
   kfree((void*)pagetable);
@@ -443,6 +514,9 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 
 void
 for_vmprint(pagetable_t pagetable, int depth) {
+  if (depth > 2) {
+    return;
+  }
   for(int i = 0; i < 512; i++){
     pte_t pte = pagetable[i];
     if(pte & PTE_V){

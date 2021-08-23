@@ -37,9 +37,8 @@ procinit(void)
       char *pa = kalloc();
       if(pa == 0)
         panic("kalloc");
-      uint64 va = KSTACK((int) (p - proc));
-      kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
-      p->kstack = va;
+      p->kstack = KSTACK((int) (p - proc));
+      p->kstackpa = pa;
   }
   kvminithart();
 }
@@ -107,6 +106,8 @@ allocproc(void)
 found:
   p->pid = allocpid();
 
+  p->kerneltable = kvminitforprocess();
+  kvmmapforprocess(p->kerneltable, p->kstack, (uint64)p->kstackpa, PGSIZE, PTE_R | PTE_W);
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
     release(&p->lock);
@@ -142,6 +143,8 @@ freeproc(struct proc *p)
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
+  freewalkforprocess(p->kerneltable);
+  p->kerneltable = 0;
   p->sz = 0;
   p->pid = 0;
   p->parent = 0;
@@ -472,8 +475,10 @@ scheduler(void)
         // to release its lock and then reacquire it
         // before jumping back to us.
         p->state = RUNNING;
+        kvminithartforprocess(p->kerneltable);
         c->proc = p;
         swtch(&c->context, &p->context);
+        kvminithart();
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.
