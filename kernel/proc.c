@@ -222,6 +222,7 @@ userinit(void)
   // allocate one user page and copy init's instructions
   // and data into it.
   uvminit(p->pagetable, initcode, sizeof(initcode));
+  uvmcopypagetable(p->pagetable, p->kerneltable, 0, PGSIZE);
   p->sz = PGSIZE;
 
   // prepare for the very first "return" from kernel to user.
@@ -249,8 +250,10 @@ growproc(int n)
     if((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
       return -1;
     }
+    uvmcopypagetable(p->pagetable, p->kerneltable, p->sz, sz);
   } else if(n < 0){
     sz = uvmdealloc(p->pagetable, sz, sz + n);
+    uvmmemsetzeropagetable(p->kerneltable, sz, sz + n);
   }
   p->sz = sz;
   return 0;
@@ -276,6 +279,7 @@ fork(void)
     release(&np->lock);
     return -1;
   }
+  uvmcopypagetable(np->pagetable, np->kerneltable, 0, p->sz);
   np->sz = p->sz;
 
   np->parent = p;

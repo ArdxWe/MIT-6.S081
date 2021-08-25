@@ -33,6 +33,7 @@ copyin_new(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 
   if (srcva >= p->sz || srcva+len >= p->sz || srcva+len < srcva)
     return -1;
+  uvmcopypagetable(p->pagetable, p->kerneltable, srcva, srcva + len);
   memmove((void *) dst, (void *)srcva, len);
   stats.ncopyin++;   // XXX lock
   return 0;
@@ -47,6 +48,9 @@ copyinstr_new(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 {
   struct proc *p = myproc();
   char *s = (char *) srcva;
+  if (uvmcopypagetable(p->pagetable, p->kerneltable, srcva, srcva + max) == -1) {
+    return -1;
+  }
   
   stats.ncopyinstr++;   // XXX lock
   for(int i = 0; i < max && srcva + i < p->sz; i++){

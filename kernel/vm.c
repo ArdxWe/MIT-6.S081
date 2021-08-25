@@ -323,6 +323,27 @@ uvmdealloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
   return newsz;
 }
 
+// let pagetable be zero from start to end for virtual address.
+// the virtual address we modified must be smaller than PLIC.
+// return 0 means success, -1 means invoke failure.
+int
+uvmmemsetzeropagetable(pagetable_t pt, uint64 end, uint64 start)
+{
+  pte_t *pte;
+  uint64 i;
+
+  for(i = start; i < end; i += PGSIZE){
+    if((pte = walk(pt, i, 0)) == 0)
+      return -1;
+    if (i < PLIC) {
+      if((*pte & PTE_V) == 0)
+        return -1;
+      *pte = 0;
+    }
+  }
+  return 0;
+}
+
 // Recursively free page-table pages.
 // All leaf mappings must already have been removed.
 void
@@ -406,6 +427,34 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   return -1;
 }
 
+// Given an old page table, copy
+// its memory into a new page table.
+// Copies just the page table, no
+// physical memory.
+// returns 0 on success, -1 on failure.
+int
+uvmcopypagetable(pagetable_t old, pagetable_t new, uint64 start, uint64 sz)
+{
+  pte_t *old_pte;
+  pte_t *new_pte;
+  uint64 i;
+
+  for(i = start; i < sz; i += PGSIZE){
+    if (i >= MAXVA) return -1;
+    if((old_pte = walk(old, i, 0)) == 0)
+      return -1;
+    if (i < PLIC) {
+      if((*old_pte & PTE_V) == 0)
+        return -1;
+      if ((new_pte = walk(new, i, 1)) == 0) {
+        return -1;
+      }
+      *new_pte = *old_pte & (~PTE_U);
+    }
+  }
+  return 0;
+}
+
 // mark a PTE invalid for user access.
 // used by exec for the user stack guard page.
 void
@@ -450,23 +499,7 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 int
 copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 {
-  uint64 n, va0, pa0;
-
-  while(len > 0){
-    va0 = PGROUNDDOWN(srcva);
-    pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
-      return -1;
-    n = PGSIZE - (srcva - va0);
-    if(n > len)
-      n = len;
-    memmove(dst, (void *)(pa0 + (srcva - va0)), n);
-
-    len -= n;
-    dst += n;
-    srcva = va0 + PGSIZE;
-  }
-  return 0;
+  return copyin_new(pagetable, dst, srcva, len);
 }
 
 // Copy a null-terminated string from user to kernel.
@@ -476,47 +509,11 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 int
 copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 {
-  uint64 n, va0, pa0;
-  int got_null = 0;
-
-  while(got_null == 0 && max > 0){
-    va0 = PGROUNDDOWN(srcva);
-    pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
-      return -1;
-    n = PGSIZE - (srcva - va0);
-    if(n > max)
-      n = max;
-
-    char *p = (char *) (pa0 + (srcva - va0));
-    while(n > 0){
-      if(*p == '\0'){
-        *dst = '\0';
-        got_null = 1;
-        break;
-      } else {
-        *dst = *p;
-      }
-      --n;
-      --max;
-      p++;
-      dst++;
-    }
-
-    srcva = va0 + PGSIZE;
-  }
-  if(got_null){
-    return 0;
-  } else {
-    return -1;
-  }
+  return copyinstr_new(pagetable, dst, srcva, max);
 }
 
 void
 for_vmprint(pagetable_t pagetable, int depth) {
-  if (depth > 2) {
-    return;
-  }
   for(int i = 0; i < 512; i++){
     pte_t pte = pagetable[i];
     if(pte & PTE_V){
